@@ -10,6 +10,8 @@ import settings
 from settings import db, render, production_mode
 import schema
 import config
+import mapnik
+from pprint import pprint, pformat
 
 options = r'(?:\.(html|xml|rdf|n3|json))'
 urls = (
@@ -41,6 +43,7 @@ urls = (
   r'/bbauth/', 'contacts.auth_yahoo',
   r'/authsub', 'contacts.auth_google',
   r'/auth/msn', 'contacts.auth_msn',
+  r'/map/wms-cd.cgi', 'maps',
 )
 
 class index:
@@ -388,6 +391,89 @@ class sparkdist:
         web.header('Content-Type', 'image/png')
         return simplegraphs.sparkline(points, inp.point)
 
+
+# @@TODO: [x] 1. Get correct settings for google maps projection.
+#         [x] 2. Display only selected district (and possibly in light color neighbors).
+#         [ ] 3. Cache results somehow.
+#         [ ] 4. Maybe get data from postgis instead of shape file?
+#         [ ] 5. Pick some better colors.
+#         [ ] 6. Show neighboring districts too.
+SHAPE_FILE_STATE='/home/jdthomas/Govt/temp/watchdog_jdthomas/watchdog/data/crawl/census/geo/st99_d00'
+SHAPE_FILE_CD='/home/jdthomas/Govt/temp/watchdog_jdthomas/watchdog/data/crawl/census/geo/cd99_110'
+class maps:
+    def GET(self):
+        #(border_color, fill_color) = ('#ff0000','#c3c3c3')
+        #(border_color, fill_color) = ('#EE4400','#002233')
+        #(border_color, fill_color) = ('#EE4400','#e4f1fa')
+        (border_color, fill_color) = ('#EE4400','#6dbde4')
+        inputs = web.input(point=None)
+        #print >>sys.stderr, inputs
+        args = ''
+        if inputs['SRS']: args += " +init="+inputs['SRS'].lower()
+        m = mapnik.Map(int(inputs['WIDTH']),int(inputs['HEIGHT']),args)
+
+        # Set background
+        m.background = mapnik.Color('steelblue')
+        if inputs['TRANSPARENT'].lower() == 'true': m.background = mapnik.Color('transparent')
+        elif inputs['BGCOLOR']: m.background = mapnik.Color(inputs['BGCOLOR'].lower().replace('0x','#'))
+
+        s = mapnik.Style()
+        r=mapnik.Rule()
+
+        layer_re = re.compile(r'.*district=(..)(.*)')
+        # Filter for selected state and district
+        (state,district)=(None,None)
+        filled = 'filled' in inputs['LAYERS']
+        if inputs['LAYERS']: 
+            t = layer_re.match(inputs['LAYERS'])
+            state = t.group(1)
+            district = int(t.group(2)) if t.group(2) else None
+            state= schema.State.where(code=state)[0].fipscode.encode()
+            fil = "[STATE]='"+state+"'" + (" and [CD]='%02d'"%district if district else '')
+            #fil = "[STATE]='"+state+"'" + (" and [CD]='%02d'"%district if district and not filled else '')
+            r.filter = mapnik.Filter(fil)
+
+        if filled:
+            r.symbols.append(mapnik.PolygonSymbolizer(mapnik.Color(fill_color)))
+            r.symbols.append(mapnik.LineSymbolizer(mapnik.Color(border_color),0.3))
+        else:
+            r.symbols.append(mapnik.LineSymbolizer(mapnik.Color(border_color),1.5))
+
+        s.rules.append(r)
+
+        m.append_style('District Style',s)
+
+        lyr = mapnik.Layer('districts')
+
+        # On the fill layer use the districts file, this gives us light
+        # district borders within a state remove the 'and not filled' to
+        # remove.
+        if not district and not filled:
+            lyr.datasource = mapnik.Shapefile(file=SHAPE_FILE_STATE)
+        else:
+            lyr.datasource = mapnik.Shapefile(file=SHAPE_FILE_CD)
+        #print lyr.datasource.describe()
+
+        lyr.styles.append('District Style')
+
+        m.layers.append(lyr)
+
+        # Set bounding box
+        bbox=map(float,inputs['BBOX'].split(','))
+        if inputs['SRS']: args = " +init="+inputs['SRS'].lower()
+        p = mapnik.Projection(args)
+        c0 = p.forward(mapnik.Coord(bbox[0],bbox[1]))
+        c1 = p.forward(mapnik.Coord(bbox[2],bbox[3]))
+        m.zoom_to_box(mapnik.Envelope(c0,c1))
+
+        format='png'
+        if inputs['FORMAT']: format=inputs['FORMAT'].replace('image/','')
+        i = mapnik.Image(m.width,m.height)
+        mapnik.render(m, i)
+        web.header('Content-Type', 'image/'+format)
+        return i.tostring(format)
+
+
 class staticdata:
     def GET(self, path):
         if not web.config.debug:
@@ -395,6 +481,7 @@ class staticdata:
 
         assert '..' not in path, 'security'
         return file('data/' + path).read()
+
 
 app = web.application(urls, globals())
 if production_mode:
