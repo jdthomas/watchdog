@@ -479,6 +479,7 @@ class maps:
         #print >>sys.stderr, inputs
         args = ''
         if inputs['SRS']: args += " +init="+inputs['SRS'].lower()
+        args = args.encode()
         m = mapnik.Map(int(inputs['WIDTH']),int(inputs['HEIGHT']),args)
 
         # Set background
@@ -530,6 +531,7 @@ class maps:
 
         # Set bounding box
         if inputs['SRS']: args = " +init="+inputs['SRS'].lower()
+        args = args.encode()
         p = mapnik.Projection(args)
         if inputs['BBOX']:
             bbox=map(float,inputs['BBOX'].split(','))
@@ -539,6 +541,7 @@ class maps:
 
         format='png'
         if inputs['FORMAT']: format=inputs['FORMAT'].replace('image/','')
+        format = format.encode()
         i = mapnik.Image(m.width,m.height)
         mapnik.render(m, i)
         web.header('Content-Type', 'image/'+format)
