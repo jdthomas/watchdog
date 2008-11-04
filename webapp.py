@@ -398,15 +398,15 @@ class sparkdist:
 #         [ ] 4. Maybe get data from postgis instead of shape file?
 #         [ ] 5. Pick some better colors.
 #         [ ] 6. Show neighboring districts too.
-SHAPE_FILE_STATE='/home/jdthomas/Govt/temp/watchdog_jdthomas/watchdog/data/crawl/census/geo/st99_d00'
-SHAPE_FILE_CD='/home/jdthomas/Govt/temp/watchdog_jdthomas/watchdog/data/crawl/census/geo/cd99_110'
+SHAPE_FILE_STATE='./data/crawl/census/geo/st99_d00'
+SHAPE_FILE_CD='./data/crawl/census/geo/cd99_110'
 class maps:
     def GET(self):
         #(border_color, fill_color) = ('#ff0000','#c3c3c3')
         #(border_color, fill_color) = ('#EE4400','#002233')
         #(border_color, fill_color) = ('#EE4400','#e4f1fa')
         (border_color, fill_color) = ('#EE4400','#6dbde4')
-        inputs = web.input(point=None)
+        inputs = web.input(point=None, SRS=None, WIDTH=256, HEIGHT=256, TRANSPARENT=None, BGCOLOR=None, LAYERS=None, BBOX=None)
         #print >>sys.stderr, inputs
         args = ''
         if inputs['SRS']: args += " +init="+inputs['SRS'].lower()
@@ -414,7 +414,7 @@ class maps:
 
         # Set background
         m.background = mapnik.Color('steelblue')
-        if inputs['TRANSPARENT'].lower() == 'true': m.background = mapnik.Color('transparent')
+        if inputs['TRANSPARENT'] and inputs['TRANSPARENT'].lower() == 'true': m.background = mapnik.Color('transparent')
         elif inputs['BGCOLOR']: m.background = mapnik.Color(inputs['BGCOLOR'].lower().replace('0x','#'))
 
         s = mapnik.Style()
@@ -423,8 +423,9 @@ class maps:
         layer_re = re.compile(r'.*district=(..)(.*)')
         # Filter for selected state and district
         (state,district)=(None,None)
-        filled = 'filled' in inputs['LAYERS']
+        filled = False
         if inputs['LAYERS']: 
+            filled = 'filled' in inputs['LAYERS']
             t = layer_re.match(inputs['LAYERS'])
             state = t.group(1)
             district = int(t.group(2)) if t.group(2) else None
@@ -459,12 +460,13 @@ class maps:
         m.layers.append(lyr)
 
         # Set bounding box
-        bbox=map(float,inputs['BBOX'].split(','))
         if inputs['SRS']: args = " +init="+inputs['SRS'].lower()
         p = mapnik.Projection(args)
-        c0 = p.forward(mapnik.Coord(bbox[0],bbox[1]))
-        c1 = p.forward(mapnik.Coord(bbox[2],bbox[3]))
-        m.zoom_to_box(mapnik.Envelope(c0,c1))
+        if inputs['BBOX']:
+            bbox=map(float,inputs['BBOX'].split(','))
+            c0 = p.forward(mapnik.Coord(bbox[0],bbox[1]))
+            c1 = p.forward(mapnik.Coord(bbox[2],bbox[3]))
+            m.zoom_to_box(mapnik.Envelope(c0,c1))
 
         format='png'
         if inputs['FORMAT']: format=inputs['FORMAT'].replace('image/','')
