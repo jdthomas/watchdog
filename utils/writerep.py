@@ -6,7 +6,7 @@ Write Your Representative
 """
 import sys
 import urllib2
-from ClientForm import ParseFile, ParseError
+from ClientForm import ParseFile, ParseError, XHTMLCompatibleFormParser
 from BeautifulSoup import BeautifulSoup
 from StringIO import StringIO
 
@@ -40,15 +40,22 @@ def has_message(soup, msg, tags='b'):
             return True
     return False
 
-def get_forms(url, data=None):    
-    response = urlopen(url, data)
+def get_forms(url, data=None, headers={}):    
+    def signup_or_search(u):
+        return ('signup' in u) or ('search' in u) or ('thomas.loc.gov' in u)
+
+    req = urllib2.Request(url, data, headers)
+    response = urlopen(req)
     if response: response = response.read()
     try:
         forms = ParseFile(StringIO(response), url, backwards_compat=False)
+    except ParseError:
+        forms = ParseFile(StringIO(response), url, backwards_compat=False, form_parser_class=XHTMLCompatibleFormParser)
     except:
         forms = []
-
-    return [Form(f) for f in forms], response or ''
+    
+    forms = [Form(f) for f in filter(lambda x: not signup_or_search(x.action), forms)]
+    return forms, response or ''
 
 def writerep_email(pol_email, pol, zipcode, state, prefix, fname, lname,
             addr1, city, phone, email, subject, msg, addr2='', addr3='', zip4=''):
@@ -57,7 +64,7 @@ def writerep_email(pol_email, pol, zipcode, state, prefix, fname, lname,
     from_addr = '%s <%s>' % (name, email)
   
     if production_mode:
-        to_addr = pol_email.lstrip('mailto:')
+        to_addr = web.lstrips(pol_email, 'mailto:')
     elif test_mode:
         to_addr = test_email
     #@@@@ msg has to be composed    
@@ -149,7 +156,8 @@ def writerep_ima(ima_link, pol, zipcode, state, prefix, fname,
         f = forms[0]
         f.fill_name(prefix, fname, lname)
         f.fill_address(addr1, addr2, addr3)
-        f.fill_all(city=city, state=state.upper(), zipcode=zipcode, zip4=zip4, email=email, phone=phone, issue=['GEN', 'OTH'])
+        f.fill_all(city=city, state=state.upper(), zipcode=zipcode, zip4=zip4, email=email, issue=['GEN', 'OTH'])
+        f.fill_phone(phone)
         f.fill(type='textarea', value=msg)
         f.fill_all(captcha=captcha)
         return f.production_click()
@@ -162,19 +170,25 @@ def writerep_zipauth(zipauth_link, pol, zipcode, state, prefix, fname,
             
     def zipauth_step1(f):    
         f.fill_name(prefix, fname, lname)
-        f.fill_all(email=email, zipcode=zipcode, zip4=zip4)
+        f.fill_address(addr1, addr2, addr3)
+        f.fill_all(email=email, zipcode=zipcode, zip4=zip4, city=city)
+        f.fill_phone(phone)
+        if 'lamborn.house.gov' in zipauth_link:
+            f.f.action = urljoin(zipauth_link, '/Contact/ContactForm.htm') #@@ they do it in ajax
         print 'step1 done',
         return f.click()
         
     def zipauth_step2(request):   
         if not request: return
-        forms, response = get_forms(request.get_full_url(), request.get_data())
+        headers = {'Cookie' : 'District=%s' % zipcode}
+        forms, response = get_forms(request.get_full_url(), request.get_data(), headers)
         forms = filter(lambda f: f.has(type='textarea'), forms)
         if forms:
             f = forms[0]
             f.fill_name(prefix, fname, lname)
             f.fill_address(addr1, addr2, addr3)
-            f.fill_all(city=city, zip=zipcode, email=email, phone=phone, issue=['GEN', 'OTH'])
+            f.fill_all(city=city, zip=zipcode, email=email, issue=['GEN', 'OTH'])
+            f.fill_phone(phone)
             f.fill(type='textarea', value=msg)
             print 'step2 done',
             return f.production_click()
@@ -193,7 +207,7 @@ def writerep_zipauth(zipauth_link, pol, zipcode, state, prefix, fname,
         return        
     
 def getcontact(pol):
-    r = db.select('pol_contacts', what='contact, contacttype', where='politician=$pol', vars=locals())
+    r = db.select('pol_contacts', what='contact, contacttype', where='politician_id=$pol', vars=locals())
     if r: 
         r = r[0]                
         return r.contact, r.contacttype
@@ -263,12 +277,16 @@ class write_your_rep:
             raise CaptchaException
 
         email = 'p-%s@watchdog.net' % (self.msg_id)
-        msg_sent = writerep(pol=pol,
+        try:
+            msg_sent = writerep(pol=pol,
                         prefix=i.prefix, lname=i.lname, fname=i.fname,
                         addr1=i.addr1, addr2=i.addr2, city=i.city,
                         zipcode=i.zipcode, zip4=i.zip4,
-                        phone=i.phone, email=email, subject=i.ptitle, msg=i.msg,
+                        phone=web.numify(i.phone), email=email, subject=i.ptitle, msg=i.msg,
                         captcha=i.get('captcha', ''))
+        except:
+            msg_sent = False
+                            
         if not pform: update_user_details(i)
         return msg_sent
 
@@ -302,7 +320,13 @@ class write_your_rep:
                 msg, msg_type = helpers.get_delete_msg()
                 return render.writerep(wyrform, msg)
             else:
-                if status: helpers.set_msg('Your message has been sent.')
+                if status:
+                    p = db.select('politician', what='firstname, middlename, lastname',
+                                    where='id=$self.pol', vars=locals())[0]
+                    polstr = '<a href="/p/%s">%s %s %s</a>' % (self.pol, p.firstname, p.middlename, p.lastname)  
+                    helpers.set_msg('Your message has been sent to %s.' % polstr)
+                else:
+                    helpers.set_msg('Sorry, your message has NOT been sent.', 'error')
             raise web.seeother('/')
         else:
             return self.GET(wyrform)

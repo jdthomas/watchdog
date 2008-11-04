@@ -51,12 +51,12 @@ def getdists(zip5, zip4=None, address=None):
     return dists
 
 def has_captcha(pol):
-    r = db.select('pol_contacts', what='contact', where="politician=$pol and captcha='t'", vars=locals())
+    r = db.select('pol_contacts', what='contact', where="politician_id=$pol and captcha='t'", vars=locals())
     return bool(r)
         
 def get_captcha_src(pol):
     if has_captcha(pol):
-        r = db.select('pol_contacts', what='contact', where="politician=$pol", vars=locals())
+        r = db.select('pol_contacts', what='contact', where="politician_id=$pol", vars=locals())
         url = r[0].contact
         response = urlopen(url)
         if response: 
@@ -91,18 +91,13 @@ def dist2pol(dist):
     except KeyError:
         return
 
-def safe(f):
-    def g(*args, **kw):
-        try:
-            return f(*args, **kw)
-        except:
-            print >> sys.stderr, '%s Failed with %s, %s' % (f.__name__, args, kw)
-            return None
-    return g        
-
-@safe
-def urlopen(url, data=None):
-    return urllib2.urlopen(url, data)    
+def urlopen(*args):
+    try:
+        return urllib2.urlopen(*args)    
+    except Exception, details:
+        print details,
+        if isinstance(args[0], urllib2.Request): print args[0].get_full_url(),
+        else: print args[0],
 
 def first(seq):
     """returns first True element"""    
@@ -131,10 +126,10 @@ class Form(object):
             request = self.f.click()
             response = urlopen(request.get_full_url(), request.get_data())
         elif test_mode:
-            self.f.action = web.ctx.homedomain + '/writerep/test'
+            home = web.ctx.get('homedomain') or 'http://0.0.0.0:8080'
+            self.f.action = home + '/writerep/test'
             request = self.f.click() 
             response = urlopen(request.get_full_url(), request.get_data())
-
         return True
 
     def click(self):
@@ -171,6 +166,20 @@ class Form(object):
             address = "%s %s %s" % (addr1, addr2, addr3)
             return self.fill(address, 'address')
 
+    def fill_phone(self, phone):
+        phone = phone + ' '* (10 - len(phone)) # make phone length 10
+        ph_ctrls = [c.name for c in self.f.controls if not c.readonly and c.name and 'phone' in c.name.lower()]
+        num_ph = len(ph_ctrls)
+        if num_ph == 1:
+            return self.f.set_value(phone, ph_ctrls[0], nr=0)
+        elif num_ph == 2:
+            self.f.set_value(phone[:3], name=ph_ctrls[0], nr=0)
+            self.f.set_value(phone[3:], name=ph_ctrls[1], nr=0)
+        elif num_ph == 3:
+            self.f.set_value(phone[:3], name=ph_ctrls[0], nr=0)
+            self.f.set_value(phone[3:6], name=ph_ctrls[1], nr=0)
+            self.f.set_value(phone[6:], name=ph_ctrls[2], nr=0)
+
     def fill(self, value, name=None, type=None):
         c = self.find_control(name=name, type=type)
         if c and not c.readonly:
@@ -178,7 +187,7 @@ class Form(object):
                 value = self.select_value(c, value)
             elif isinstance(value, list):
                 value = value[0]
-            self.f.set_value(value, name=c.name, type=c.type)
+            self.f.set_value(value, name=c.name, type=c.type, nr=0)
             return True 
         return False
 
