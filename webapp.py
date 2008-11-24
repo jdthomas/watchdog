@@ -2,7 +2,7 @@
 import re, sys
 import web
 
-from utils import zip2rep, simplegraphs, apipublish, users, writerep
+from utils import zip2rep, simplegraphs, apipublish, users, writerep, se
 import blog
 import petition
 import settings
@@ -25,6 +25,7 @@ urls = (
   r'/us/([a-z][a-z]-\d+)%s?' % options, 'district',
   r'/(us|p)/by/(.*)/distribution\.png', 'sparkdist',
   r'/(us|p)/by/(.*)', 'dproperty',
+  r'/p/(.*?)/lobby', 'politician_lobby',
   r'/p/(.*?)/earmarks', 'politician_earmarks',
   r'/p/(.*?)/introduced', 'politician_introduced',
   r'/p/(.*?)/groups', 'politician_groups',
@@ -93,21 +94,23 @@ class find:
         i = web.input(address=None)
         pzip5 = re.compile(r'\d{5}')
         pzip4 = re.compile(r'\d{5}-\d{4}')
-        pname = re.compile(r'[a-zA-Z\.]+')
         pdist = re.compile(r'[a-zA-Z]{2}\-\d{2}')
         
         dists = None
-        if i.get('zip'):
-            if pzip4.match(i.zip):
-                zip, plus4 = i.zip.split('-')
+        if not i.get('q'):
+            i.q = i.get('zip')
+        
+        if i.q:
+            if pzip4.match(i.q):
+                zip, plus4 = i.q.split('-')
                 dists = [x.district for x in
                   db.select('zip4', where='zip=$zip and plus4=$plus4', vars=locals())]
             
-            elif pzip5.match(i.zip):
+            elif pzip5.match(i.q):
                 try:
-                    dists = zip2rep.zip2dist(i.zip, i.address)
+                    dists = zip2rep.zip2dist(i.q, i.address)
                 except zip2rep.BadAddress:
-                    return render.find_badaddr(i.zip, i.address)
+                    return render.find_badaddr(i.q, i.address)
             
             if dists:
                 d_dists = schema.District.select(where=web.sqlors('name=', dists))
@@ -117,29 +120,23 @@ class find:
                 if len(dists) == 1:
                     raise web.seeother('/us/%s' % dists[0].lower())
                 elif len(dists) == 0:
-                    return render.find_none(i.zip)
+                    return render.find_none(i.q)
                 else:
-                    return render.find_multi(i.zip, d_dists)
+                    return render.find_multi(i.q, d_dists)
 
-            if pdist.match(i.zip):
-                raise web.seeother('/us/%s' % i.zip)
-
-            if pname.match(i.zip):
-                in_name = i.zip.lower()
-                name = in_name.replace(' ', '_')
-                vars = {'name':'%%%s%%' % name}
-                reps = db.select('politician', where="id like $name", vars=vars)
-                if len(reps) == 0:
-                    vars = {'name':'%%%s%%' % in_name}
-                    reps = db.select('v_politician_name', where="name ilike $name", vars=vars)
-                if len(reps) > 1:
-                    return render.find_multi_reps(reps)
-                else:
-                    try:
-                        rep = reps[0]
-                        web.seeother('/p/%s' % rep.id)
-                    except IndexError:
-                        raise web.notfound
+            if pdist.match(i.q):
+                raise web.seeother('/us/%s' % i.q)
+            
+            results = se.query(i.q)
+            reps = db.select('politician', where=web.sqlors('id=', results))
+            if len(reps) > 1:
+                return render.find_multi_reps(reps)
+            else:
+                try:
+                    rep = reps[0]
+                    web.seeother('/p/%s' % rep.id)
+                except IndexError:
+                    raise web.notfound
 
         else:
             index = schema.District.select(order='name asc')
@@ -321,6 +318,15 @@ class politician:
 
         return render.politician(p, sparkpos)
 
+class politician_lobby:
+    def GET(self, polid, format=None):
+        limit = 50
+        page = int(web.input(page=0).page)
+        #c = schema.lob_contribution.select(where='politician_id=$polid', limit=limit, offset=page*limit, order='amount desc', vars=locals())
+        c = db.select(['lob_organization', 'lob_filing', 'lob_contribution', 'lob_person'], 
+                where="politician_id = $polid and lob_filing.id = filing_id and lob_organization.id = org_id and lob_person.id = lobbyist_id", 
+                order='amount desc;', vars=locals())
+        return render.politician_lobby(c, limit)
 class lob_filing:
     def GET(self, filing_id):
         limit = 50
@@ -562,9 +568,11 @@ def notfound():
     web.ctx.status = '404 Not Found'
     return getattr(render, '404')()
 
+def internalerror():
+    return file('templates/500.html').read()
+
 app.notfound = notfound
 if production_mode:
-    app.internalerror = web.emailerrors(config.send_errors_to, web.debugerror)
-settings.setup_session(app)
+    app.internalerror = web.emailerrors(config.send_errors_to, internalerror)
 
 if __name__ == "__main__": app.run()
